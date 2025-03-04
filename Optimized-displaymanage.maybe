@@ -1,0 +1,164 @@
+import time
+import random
+from pimoroni import Hub75, RGB
+from font8x8 import Font8x8
+from api_client import APIClient
+from animations import Animation
+import config
+import framebuf
+
+class DisplayManager:
+    def __init__(self):
+        self.display = Hub75(config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT)  # Initialize with appropriate parameters
+        self.font = Font8x8()
+        self.api_client = APIClient()
+        self.animation = Animation(self.display)
+        self.current_mode = 0
+        self.modes = [self.show_youtube_subs, self.show_bitcoin_price, self.show_weather, self.show_animation, self.show_pixel_art, self.show_crypto_price]
+        self.last_update = time.time()
+
+    def update(self):
+        try:
+            if time.time() - self.last_update > config.DISPLAY_CHANGE_INTERVAL:  # Change mode based on interval
+                self.current_mode = (self.current_mode + 1) % len(self.modes)
+                self.last_update = time.time()
+                self.apply_transition(self.modes[self.current_mode])
+            else:
+                self.modes[self.current_mode]()
+        except Exception as e:
+            print(f"Error in update method: {e}")
+
+    def show_youtube_subs(self):
+        try:
+            subs = self.api_client.get_youtube_subs()
+            self.scroll_text(f"YT Subs: {subs}")
+        except Exception as e:
+            print(f"Error in show_youtube_subs method: {e}")
+
+    def show_bitcoin_price(self):
+        try:
+            price = self.api_client.get_bitcoin_price()
+            self.scroll_text(f"BTC: ${price}")
+        except Exception as e:
+            print(f"Error in show_bitcoin_price method: {e}")
+
+    def show_weather(self):
+        try:
+            weather, icon_id = self.api_client.get_weather()
+            icon_buffer = self.api_client.get_weather_icon(icon_id)
+            self.display_weather(weather, icon_buffer)
+        except Exception as e:
+            print(f"Error in show_weather method: {e}")
+
+    def show_animation(self):
+        self.animation.play()
+
+    def show_pixel_art(self):
+        try:
+            buffer = self.api_client.get_random_pixel_art()
+            self.api_client.display_pixel_art(self.display, buffer)
+        except Exception as e:
+            print(f"Error in show_pixel_art method: {e}")
+
+    def show_crypto_price(self):
+        try:
+            crypto_id = "bitcoin"  # You can change this to any supported cryptocurrency id
+            price, logo_url = self.api_client.get_crypto_data(crypto_id)
+            logo_buffer = self.api_client.get_image(logo_url)
+            self.display_crypto_price(crypto_id, price, logo_buffer)
+        except Exception as e:
+            print(f"Error in show_crypto_price method: {e}")
+
+    def display_weather(self, weather, icon_buffer):
+        try:
+            fb = framebuf.FrameBuffer(icon_buffer, 64, 64, framebuf.RGB565)
+            self.display.fill(RGB(0, 0, 0))
+            self.display.blit(fb, 0, 0)
+            self.font.draw(self.display, weather, 32, self.display.height // 2 - 4, RGB(255, 0, 0))
+            self.display.show()
+        except Exception as e:
+            print(f"Error in display_weather method: {e}")
+
+    def display_crypto_price(self, crypto_id, price, logo_buffer):
+        try:
+            fb = framebuf.FrameBuffer(logo_buffer, 64, 64, framebuf.RGB565)
+            self.display.fill(RGB(0, 0, 0))
+            self.display.blit(fb, 0, 0)
+            self.font.draw(self.display, f"{crypto_id.upper()}: ${price}", 32, self.display.height // 2 - 4, RGB(255, 0, 0))
+            self.display.show()
+        except Exception as e:
+            print(f"Error in display_crypto_price method: {e}")
+
+    def scroll_text(self, text):
+        try:
+            text_width = len(text) * 8
+            if text_width > self.display.width:
+                self.display.fill(RGB(255, 0, 0))
+                self.font.draw(self.display, "ERROR", 0, self.display.height // 2 - 4, RGB(255, 255, 255))
+                self.display.show()
+                time.sleep(2)
+            else:
+                for offset in range(text_width + self.display.width):
+                    self.display.fill(RGB(0, 0, 0))
+                    for i, char in enumerate(text):
+                        self.font.draw(self.display, char, self.display.width - offset + i * 8, self.display.height // 2 - 4, RGB(255, 0, 0))
+                    self.display.show()
+                    time.sleep(0.05)
+        except Exception as e:
+            print(f"Error in scroll_text method: {e}")
+
+    def apply_transition(self, new_mode):
+        if config.TRANSITION_EFFECT == 'slide_left':
+            self.slide_transition(new_mode, direction='left')
+        elif config.TRANSITION_EFFECT == 'slide_right':
+            self.slide_transition(new_mode, direction='right')
+        elif config.TRANSITION_EFFECT == 'dissolve':
+            self.dissolve_transition(new_mode)
+
+    def slide_transition(self, new_mode, direction='left'):
+        try:
+            current_frame = bytearray(self.display.width * self.display.height * 2)
+            self.display.read_framebuffer(current_frame)
+            new_frame = bytearray(self.display.width * self.display.height * 2)
+            temp_display = Hub75(self.display.width, self.display.height)
+            new_mode(temp_display)
+            temp_display.read_framebuffer(new_frame)
+            for offset in range(self.display.width):
+                for y in range(self.display.height):
+                    for x in range(self.display.width):
+                        if direction == 'left':
+                            if x + offset < self.display.width:
+                                color = framebuf.RGB565(new_frame[(x + offset + y * self.display.width) * 2:(x + 1 + offset + y * self.display.width) * 2])
+                            else:
+                                color = framebuf.RGB565(current_frame[(x + (y * self.display.width)) * 2:(x + 1 + (y * self.display.width)) * 2])
+                        elif direction == 'right':
+                            if x - offset >= 0:
+                                color = framebuf.RGB565(new_frame[(x - offset + y * self.display.width) * 2:(x + 1 - offset + y * self.display.width) * 2])
+                            else:
+                                color = framebuf.RGB565(current_frame[(x + (y * self.display.width)) * 2:(x + 1 + (y * self.display.width)) * 2])
+                        self.display.pixel(x, y, color)
+                self.display.show()
+                time.sleep(0.05)
+        except Exception as e:
+            print(f"Error in slide_transition method: {e}")
+
+    def dissolve_transition(self, new_mode):
+        try:
+            current_frame = bytearray(self.display.width * self.display.height * 2)
+            self.display.read_framebuffer(current_frame)
+            new_frame = bytearray(self.display.width * self.display.height * 2)
+            temp_display = Hub75(self.display.width, self.display.height)
+            new_mode(temp_display)
+            temp_display.read_framebuffer(new_frame)
+            for step in range(10):
+                for y in range(self.display.height):
+                    for x in range(self.display.width):
+                        if random.random() < (step + 1) / 10:
+                            color = framebuf.RGB565(new_frame[(x + y * self.display.width) * 2:(x + 1 + y * self.display.width) * 2])
+                        else:
+                            color = framebuf.RGB565(current_frame[(x + (y * self.display.width)) * 2:(x + 1 + (y * self.display.width)) * 2])
+                        self.display.pixel(x, y, color)
+                self.display.show()
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"Error in dissolve_transition method: {e}")
